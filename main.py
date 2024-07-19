@@ -8,12 +8,13 @@ from spotipy.oauth2 import SpotifyOAuth
 from tkinter import Tk, filedialog
 import re
 import logging
+from check_internet import check_internet_connection
 
 logging.basicConfig(filename='app.log', level=logging.DEBUG, filemode='w', format="%(asctime)s -> %(levelname)s -> %(message)s")
 
 
 class Music:
-    def __init__(self, directory, client_id, client_secret, redirect_uri) -> None:
+    def __init__(self, directory: str, client_id: str, client_secret: str, redirect_uri: str) -> None:
         self.directory = directory
         self.client_id = client_id
         self.client_secret = client_secret
@@ -23,7 +24,13 @@ class Music:
         self.user_id = None
 
     def files(self) -> list[str]:
-        return [f for f in os.listdir(self.directory) if f.endswith(('.mp3', '.m4a'))]
+        try:
+            files = [f for f in os.listdir(self.directory) if f.endswith(('.mp3', '.m4a'))]
+            logging.debug(f'Found {len(files)} music files.')
+            return files
+        except Exception as e:
+            logging.error(f'Error accessing directory {self.directory}: {e}')
+            raise
 
     def extract_metadata(self) -> list[dict[str, Any]]:
         metadata_list: list = []
@@ -45,7 +52,7 @@ class Music:
         logging.info(metadata_list)
         return metadata_list
 
-    def parse_filename(self, filename) -> tuple[str | Any, str | Any] | tuple[Any, str]:
+    def parse_filename(self, filename: str) -> tuple[str | Any, str | Any] | tuple[Any, str]:
         # Attempt to extract metadata from filename using regex pattern
         pattern = re.compile(r'(?P<artist>.+?) - (?P<title>.+)')
         match = pattern.match(os.path.splitext(filename)[0])
@@ -55,39 +62,52 @@ class Music:
         return os.path.splitext(filename)[0], 'Unknown Artist'
 
     def integrate_with_spotify(self) -> None:
-        self.sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
-            client_id=self.client_id,
-            client_secret=self.client_secret,
-            redirect_uri=self.redirect_uri,
-            scope=self.scope
-        ))
-        self.user_id = self.sp.me()['id']
+        try:
+            self.sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+                redirect_uri=self.redirect_uri,
+                scope=self.scope
+            ))
+            self.user_id = self.sp.me()['id']
+            logging.info(f'Successfully authenticated with Spotify as user {self.user_id}.')
+        except Exception as e:
+            logging.error(f'Error integrating with spotify: {e}')
+            raise
 
-    def create_playlist(self, playlist_name='Local Tracks') -> int:
+    def create_playlist(self, playlist_name: str ='Local Tracks') -> str:
         self.integrate_with_spotify()
 
-        # Check if the playlist already exists
-        playlists = self.sp.user_playlists(self.user_id)
-        for playlist in playlists['items']:
-            if playlist['name'] == playlist_name:
-                print(f"Playlist '{playlist_name}' already exists.")
-                return playlist['id']
+        try:
+            # Check if the playlist already exists
+            playlists = self.sp.user_playlists(self.user_id)
+            for playlist in playlists['items']:
+                if playlist['name'] == playlist_name:
+                    logging.info(f"Playlist '{playlist_name}' already exists.")
+                    return playlist['id']
 
-        # If playlist does not exist, create it
-        playlist = self.sp.user_playlist_create(user=self.user_id, name=playlist_name, public=True)
-        print(f'Created new playlist "{playlist_name}".')
-        return playlist['id']
+            # If playlist does not exist, create it
+            playlist = self.sp.user_playlist_create(user=self.user_id, name=playlist_name, public=True)
+            logging.info(f'Created new playlist "{playlist_name}".')
+            return playlist['id']
+        except Exception as e:
+            logging.error(f'Error creating playlist "{playlist_name}": {e}')
+            raise
 
-    def get_playlist_tracks(self, playlist_id) -> list[str]:
+    def get_playlist_tracks(self, playlist_id: str) -> list[str]:
         tracks: list = []
-        results = self.sp.playlist_tracks(playlist_id)
-        tracks.extend(results['items'])
-        while results['next']:
-            results = self.sp.next(results)
+        try:
+            results = self.sp.playlist_tracks(playlist_id)
             tracks.extend(results['items'])
-        return [track['track']['id'] for track in tracks]
+            while results['next']:
+                results = self.sp.next(results)
+                tracks.extend(results['items'])
+            return [track['track']['id'] for track in tracks]
+        except Exception as e:
+            logging.error(f'Error retrieving tracks from playlist {playlist_id}: {e}')
+            raise
 
-    def search_and_add_tracks(self, playlist_id) -> None:
+    def search_and_add_tracks(self, playlist_id: str) -> None:
         existing_track_ids = self.get_playlist_tracks(playlist_id)
         metadata_list = self.extract_metadata()
         for metadata in metadata_list:
@@ -111,6 +131,10 @@ def configure() -> None:
 
 
 def main() -> None:
+    if not check_internet_connection():
+        logging.error('No internet connection. Please check your connection and try again.')
+        return
+
     configure()
 
     root = Tk()
