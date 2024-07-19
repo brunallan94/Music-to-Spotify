@@ -1,9 +1,15 @@
 import os
+from typing import List, Dict, Any, Tuple
 from dotenv import load_dotenv
 from mutagen.easyid3 import EasyID3
+from mutagen.id3 import ID3NoHeaderError
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from tkinter import Tk, filedialog
+import re
+import logging
+
+logging.basicConfig(filename='app.log', level=logging.DEBUG, filemode='w', format="%(asctime)s -> %(levelname)s -> %(message)s")
 
 
 class Music:
@@ -16,24 +22,39 @@ class Music:
         self.sp = None
         self.user_id = None
 
-    def files(self):
-        return [f for f in os.listdir(self.directory) if f.endswith('.mp3')]
+    def files(self) -> list[str]:
+        return [f for f in os.listdir(self.directory) if f.endswith(('.mp3', '.m4a'))]
 
-    def extract_metadata(self):
-        metadata_list = []
+    def extract_metadata(self) -> list[dict[str, Any]]:
+        metadata_list: list = []
         for file in self.files():
-            file_path = os.path.join(self.directory, file)
+            file_path: str = os.path.join(self.directory, file)
             try:
                 audio = EasyID3(file_path)
                 metadata_list.append({
                     'title': audio.get('title', [os.path.splitext(file)[0]])[0],
                     'artist': audio.get('artist', ['Unknown Artist'])[0]
                 })
+            except ID3NoHeaderError:
+                title, artist = self.parse_filename(file)
+                metadata_list.append({'title': title, 'artist': artist})
             except Exception as e:
                 print(f"Error reading {file_path}: {e}")
+                title, artist = self.parse_filename(file)
+                metadata_list.append({'title': title, 'artist': artist})
+        logging.info(metadata_list)
         return metadata_list
 
-    def integrate_with_spotify(self):
+    def parse_filename(self, filename) -> tuple[str | Any, str | Any] | tuple[Any, str]:
+        # Attempt to extract metadata from filename using regex pattern
+        pattern = re.compile(r'(?P<artist>.+?) - (?P<title>.+)')
+        match = pattern.match(os.path.splitext(filename)[0])
+        logging.info(match)
+        if match:
+            return match.group('title'), match.group('artist')
+        return os.path.splitext(filename)[0], 'Unknown Artist'
+
+    def integrate_with_spotify(self) -> None:
         self.sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
             client_id=self.client_id,
             client_secret=self.client_secret,
@@ -42,7 +63,7 @@ class Music:
         ))
         self.user_id = self.sp.me()['id']
 
-    def create_playlist(self, playlist_name='Local Tracks'):
+    def create_playlist(self, playlist_name='Local Tracks') -> int:
         self.integrate_with_spotify()
 
         # Check if the playlist already exists
@@ -57,8 +78,8 @@ class Music:
         print(f'Created new playlist "{playlist_name}".')
         return playlist['id']
 
-    def get_playlist_tracks(self, playlist_id):
-        tracks = []
+    def get_playlist_tracks(self, playlist_id) -> list[str]:
+        tracks: list = []
         results = self.sp.playlist_tracks(playlist_id)
         tracks.extend(results['items'])
         while results['next']:
@@ -66,7 +87,7 @@ class Music:
             tracks.extend(results['items'])
         return [track['track']['id'] for track in tracks]
 
-    def search_and_add_tracks(self, playlist_id):
+    def search_and_add_tracks(self, playlist_id) -> None:
         existing_track_ids = self.get_playlist_tracks(playlist_id)
         metadata_list = self.extract_metadata()
         for metadata in metadata_list:
